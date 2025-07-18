@@ -1,7 +1,8 @@
 import fs from "fs";
 import { pipeline, AutoTokenizer } from "@xenova/transformers";
 import { Pinecone } from "@pinecone-database/pinecone";
-
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: "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" });
 // ===== CONFIGURATION CONSTANTS =====
 
 // File Processing Configuration
@@ -25,11 +26,6 @@ const pineconeClient = new Pinecone({
 
 // ===== TEXT PROCESSING FUNCTIONS =====
 
-/**
- * Loads text from a file and performs basic cleaning
- * @param {string} filePath - Path to the text file
- * @returns {string} Cleaned text content
- */
 function loadAndCleanTextFile(filePath) {
   try {
     console.log(`📖 Loading text from: ${filePath}`);
@@ -43,23 +39,10 @@ function loadAndCleanTextFile(filePath) {
   }
 }
 
-/**
- * Splits text into sentences using a simple regex.
- * @param {string} text
- * @returns {string[]}
- */
 function splitIntoSentences(text) {
   return text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
 }
 
-/**
- * Improved chunking: sentence-aware, token-limited, with overlap.
- * Handles large texts efficiently and avoids mid-sentence splits.
- * @param {string} textContent - Input text to chunk
- * @param {number} maxTokens - Max tokens per chunk (default 512)
- * @param {number} overlapSentences - Number of overlapping sentences between chunks (default 2)
- * @returns {Promise<Array<Object>>} Array of chunk objects
- */
 async function createTextChunks(
   textContent,
   maxTokens = 512,
@@ -84,7 +67,6 @@ async function createTextChunks(
         wordCount: chunk.join(' ').split(' ').length,
         startPosition: i - chunk.length,
       });
-      // Overlap last N sentences
       const overlap = chunk.slice(-overlapSentences);
       chunk = [...overlap, sentence];
       chunkTokenCount = 0;
@@ -110,11 +92,6 @@ async function createTextChunks(
 
 // ===== EMBEDDING FUNCTIONS =====
 
-/**
- * Generates embeddings for text chunks using the BGE-M3 model
- * @param {Array<Object>} textChunks - Array of text chunk objects
- * @returns {Promise<Array<Float32Array>>} Array of embedding vectors
- */
 async function generateEmbeddingsForChunks(textChunks) {
   console.log(`🧠 Initializing embedding model '${EMBEDDING_MODEL_NAME}'...`);
   const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
@@ -138,11 +115,6 @@ async function generateEmbeddingsForChunks(textChunks) {
   return embeddingVectors;
 }
 
-/**
- * Generates embedding for a single query string
- * @param {string} queryText - Text to embed
- * @returns {Promise<Float32Array>} Query embedding vector
- */
 async function generateQueryEmbedding(queryText) {
   console.log(`🧠 Embedding query: "${queryText}"...`);
   const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
@@ -156,10 +128,6 @@ async function generateQueryEmbedding(queryText) {
 
 // ===== PINECONE DATABASE FUNCTIONS =====
 
-/**
- * Ensures the Pinecone index exists, creates it if necessary
- * @returns {Promise<void>}
- */
 async function ensurePineconeIndexExists() {
   console.log("🔍 Checking if Pinecone index exists...");
   const indexList = await pineconeClient.listIndexes();
@@ -184,12 +152,6 @@ async function ensurePineconeIndexExists() {
   }
 }
 
-/**
- * Uploads text chunks and embeddings to Pinecone in batches
- * @param {Array<Object>} textChunks - Text chunk objects
- * @param {Array<Float32Array>} embeddingVectors - Corresponding embeddings
- * @returns {Promise<void>}
- */
 async function uploadChunksToPinecone(textChunks, embeddingVectors) {
   console.log(`💾 Preparing to upload ${textChunks.length} vectors to Pinecone...`);
   const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
@@ -227,13 +189,34 @@ async function uploadChunksToPinecone(textChunks, embeddingVectors) {
   console.log(`🎉 Successfully uploaded all ${vectorsToUpload.length} vectors to Pinecone`);
 }
 
+// ===== AI-POWERED ANSWERING FUNCTION =====
+
+async function answerWithGPT4O(question, topChunks) {
+  const context = topChunks.map((c, i) => `Context ${i + 1}: ${c.text}`).join('\n\n');
+  const prompt = `
+You are an expert assistant. Use ONLY the following context to answer the user's question.
+
+${context}
+
+Question: ${question}
+Answer:
+  `;
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 512,
+    temperature: 0.2,
+  });
+  return completion.choices[0].message.content.trim();
+}
+
 /**
- * Searches the Pinecone index for similar text chunks
+ * Searches the Pinecone index for similar text chunks and answers the question using GPT-4o
  * @param {string} searchQuery - Query string to search for
  * @param {number} maxResults - Number of top results to return
  * @returns {Promise<void>}
  */
-async function searchSimilarChunks(searchQuery, maxResults = 5) {
+async function searchAndAnswer(searchQuery, maxResults = 5) {
   console.log(`🔎 Searching for: "${searchQuery}"`);
   const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
 
@@ -257,6 +240,14 @@ async function searchSimilarChunks(searchQuery, maxResults = 5) {
         console.log(`📝 Preview: ${previewText}${truncationIndicator}`);
         console.log("─".repeat(80) + "\n");
       });
+
+      // Use top chunks as context for GPT-4o
+      const topChunks = searchResults.matches.map(match => ({
+        text: match.metadata?.text || ""
+      }));
+      const answer = await answerWithGPT4O(searchQuery, topChunks);
+      console.log("💡 AI Answer:\n", answer);
+
     } else {
       console.log("❌ No relevant chunks found for your search query");
     }
@@ -268,10 +259,6 @@ async function searchSimilarChunks(searchQuery, maxResults = 5) {
 
 // ===== MAIN PIPELINE =====
 
-/**
- * Main execution pipeline that orchestrates the entire process
- * @returns {Promise<void>}
- */
 async function executeMainPipeline() {
   console.log("🚀 Starting Text Embedding and Search Pipeline\n");
   try {
@@ -300,11 +287,11 @@ async function executeMainPipeline() {
     console.log("=".repeat(50));
     await uploadChunksToPinecone(textChunks, embeddingVectors);
 
-    // Step 5: Test search functionality
+    // Step 5: Test search functionality and answer with GPT-4o
     console.log("\n" + "=".repeat(50));
-    console.log("STEP 5: SEARCH TESTING");
+    console.log("STEP 5: SEARCH & AI ANSWER");
     console.log("=".repeat(50));
-    await searchSimilarChunks("What is the main topic discussed?", 3);
+    await searchAndAnswer("რა ქნა ფარსმან სპარსმა", 3);
 
     console.log("\n🎉 Pipeline completed successfully!");
   } catch (error) {
