@@ -2,7 +2,10 @@ import fs from "fs";
 import { pipeline, AutoTokenizer } from "@xenova/transformers";
 import { Pinecone } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
-const openai = new OpenAI({ apiKey: "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" });
+const openai = new OpenAI({
+  apiKey:
+    "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",
+});
 // ===== CONFIGURATION CONSTANTS =====
 
 // File Processing Configuration
@@ -10,7 +13,8 @@ const SOURCE_TEXT_FILE_PATH = "./Dummy Text Files/corpora.txt";
 const BATCH_SIZE = 100;
 
 // Pinecone Configuration
-const PINECONE_API_KEY = "pcsk_TqZYd_2JKFQdA9hNpduqVHPx2E6Xo5LfQsLNZFRjXMDu4jnWWrtdpNkitXNs96cTHWUec";
+const PINECONE_API_KEY =
+  "pcsk_TqZYd_2JKFQdA9hNpduqVHPx2E6Xo5LfQsLNZFRjXMDu4jnWWrtdpNkitXNs96cTHWUec";
 const PINECONE_INDEX_NAME = "my-bge-m3-index";
 const PINECONE_INDEX_REGION = "us-east-1";
 
@@ -31,7 +35,9 @@ function loadAndCleanTextFile(filePath) {
     console.log(`📖 Loading text from: ${filePath}`);
     const rawTextContent = fs.readFileSync(filePath, "utf-8");
     const cleanedText = rawTextContent.replace(/\s+/g, " ").trim();
-    console.log(`✅ Successfully loaded ${cleanedText.split(' ').length} words`);
+    console.log(
+      `✅ Successfully loaded ${cleanedText.split(" ").length} words`
+    );
     return cleanedText;
   } catch (error) {
     console.error(`❌ Error loading text file ${filePath}:`, error.message);
@@ -49,7 +55,7 @@ async function createTextChunks(
   overlapSentences = 2
 ) {
   console.log(`✂️ Creating token-limited, sentence-aware chunks...`);
-  const tokenizer = await AutoTokenizer.from_pretrained('Xenova/bge-m3');
+  const tokenizer = await AutoTokenizer.from_pretrained("Xenova/bge-m3");
   const sentences = splitIntoSentences(textContent);
   const textChunks = [];
   let chunk = [];
@@ -63,8 +69,8 @@ async function createTextChunks(
     if (chunkTokenCount + tokenCount > maxTokens) {
       textChunks.push({
         id: `chunk_${textChunks.length}`,
-        text: chunk.join(' '),
-        wordCount: chunk.join(' ').split(' ').length,
+        text: chunk.join(" "),
+        wordCount: chunk.join(" ").split(" ").length,
         startPosition: i - chunk.length,
       });
       const overlap = chunk.slice(-overlapSentences);
@@ -81,8 +87,8 @@ async function createTextChunks(
   if (chunk.length > 0) {
     textChunks.push({
       id: `chunk_${textChunks.length}`,
-      text: chunk.join(' '),
-      wordCount: chunk.join(' ').split(' ').length,
+      text: chunk.join(" "),
+      wordCount: chunk.join(" ").split(" ").length,
       startPosition: sentences.length - chunk.length,
     });
   }
@@ -94,7 +100,10 @@ async function createTextChunks(
 
 async function generateEmbeddingsForChunks(textChunks) {
   console.log(`🧠 Initializing embedding model '${EMBEDDING_MODEL_NAME}'...`);
-  const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
+  const embeddingPipeline = await pipeline(
+    "feature-extraction",
+    EMBEDDING_MODEL_NAME
+  );
   console.log("✅ Embedding model loaded successfully");
 
   const embeddingVectors = [];
@@ -104,10 +113,13 @@ async function generateEmbeddingsForChunks(textChunks) {
     if (chunkIndex % 10 === 0 || chunkIndex === totalChunks - 1) {
       console.log(`⚡ Processing chunk ${chunkIndex + 1} of ${totalChunks}...`);
     }
-    const embeddingOutput = await embeddingPipeline(textChunks[chunkIndex].text, {
-      pooling: "cls",
-      normalize: true,
-    });
+    const embeddingOutput = await embeddingPipeline(
+      textChunks[chunkIndex].text,
+      {
+        pooling: "cls",
+        normalize: true,
+      }
+    );
     embeddingVectors.push(embeddingOutput.data);
   }
 
@@ -117,7 +129,10 @@ async function generateEmbeddingsForChunks(textChunks) {
 
 async function generateQueryEmbedding(queryText) {
   console.log(`🧠 Embedding query: "${queryText}"...`);
-  const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
+  const embeddingPipeline = await pipeline(
+    "feature-extraction",
+    EMBEDDING_MODEL_NAME
+  );
   const queryEmbeddingOutput = await embeddingPipeline(queryText, {
     pooling: "cls",
     normalize: true,
@@ -131,7 +146,9 @@ async function generateQueryEmbedding(queryText) {
 async function ensurePineconeIndexExists() {
   console.log("🔍 Checking if Pinecone index exists...");
   const indexList = await pineconeClient.listIndexes();
-  const indexExists = indexList.indexes?.some(index => index.name === PINECONE_INDEX_NAME);
+  const indexExists = indexList.indexes?.some(
+    (index) => index.name === PINECONE_INDEX_NAME
+  );
 
   if (!indexExists) {
     console.log(`📝 Creating Pinecone index '${PINECONE_INDEX_NAME}'...`);
@@ -146,14 +163,18 @@ async function ensurePineconeIndexExists() {
         },
       },
     });
-    console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' created successfully`);
+    console.log(
+      `✅ Pinecone index '${PINECONE_INDEX_NAME}' created successfully`
+    );
   } else {
     console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' already exists`);
   }
 }
 
 async function uploadChunksToPinecone(textChunks, embeddingVectors) {
-  console.log(`💾 Preparing to upload ${textChunks.length} vectors to Pinecone...`);
+  console.log(
+    `💾 Preparing to upload ${textChunks.length} vectors to Pinecone...`
+  );
   const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
   const vectorsToUpload = [];
 
@@ -175,8 +196,15 @@ async function uploadChunksToPinecone(textChunks, embeddingVectors) {
   const totalBatches = Math.ceil(vectorsToUpload.length / BATCH_SIZE);
   console.log(`📦 Uploading in ${totalBatches} batches of ${BATCH_SIZE}...`);
 
-  for (let batchIndex = 0; batchIndex < vectorsToUpload.length; batchIndex += BATCH_SIZE) {
-    const currentBatch = vectorsToUpload.slice(batchIndex, batchIndex + BATCH_SIZE);
+  for (
+    let batchIndex = 0;
+    batchIndex < vectorsToUpload.length;
+    batchIndex += BATCH_SIZE
+  ) {
+    const currentBatch = vectorsToUpload.slice(
+      batchIndex,
+      batchIndex + BATCH_SIZE
+    );
     const batchNumber = Math.floor(batchIndex / BATCH_SIZE) + 1;
     try {
       await pineconeIndex.upsert(currentBatch);
@@ -186,13 +214,17 @@ async function uploadChunksToPinecone(textChunks, embeddingVectors) {
       throw new Error(`Batch upload failed: ${error.message}`);
     }
   }
-  console.log(`🎉 Successfully uploaded all ${vectorsToUpload.length} vectors to Pinecone`);
+  console.log(
+    `🎉 Successfully uploaded all ${vectorsToUpload.length} vectors to Pinecone`
+  );
 }
 
 // ===== AI-POWERED ANSWERING FUNCTION =====
 
 async function answerWithGPT4O(question, topChunks) {
-  const context = topChunks.map((c, i) => `Context ${i + 1}: ${c.text}`).join('\n\n');
+  const context = topChunks
+    .map((c, i) => `Context ${i + 1}: ${c.text}`)
+    .join("\n\n");
   const prompt = `
 You are an expert assistant. Use ONLY the following context to answer the user's question.
 
@@ -216,13 +248,15 @@ Answer:
  * @param {number} maxResults - Number of top results to return
  * @returns {Promise<void>}
  */
-async function searchAndAnswer(searchQuery, maxResults = 5) {
+export async function searchAndAnswer(searchQuery, maxResults = 5) {
   console.log(`🔎 Searching for: "${searchQuery}"`);
   const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
 
   try {
     const queryEmbedding = await generateQueryEmbedding(searchQuery);
-    console.log(`🔍 Querying Pinecone index for ${maxResults} similar chunks...`);
+    console.log(
+      `🔍 Querying Pinecone index for ${maxResults} similar chunks...`
+    );
     const searchResults = await pineconeIndex.query({
       vector: Array.from(queryEmbedding),
       topK: maxResults,
@@ -230,24 +264,29 @@ async function searchAndAnswer(searchQuery, maxResults = 5) {
     });
 
     if (searchResults.matches && searchResults.matches.length > 0) {
-      console.log(`✨ Found ${searchResults.matches.length} relevant results:\n`);
+      console.log(
+        `✨ Found ${searchResults.matches.length} relevant results:\n`
+      );
       searchResults.matches.forEach((match, rankIndex) => {
         const similarityScore = (match.score * 100).toFixed(2);
-        const previewText = match.metadata?.text?.slice(0, 300) || "No text available";
-        const truncationIndicator = match.metadata?.text?.length > 300 ? "..." : "";
-        console.log(`🔹 Rank ${rankIndex + 1} | Similarity: ${similarityScore}%`);
+        const previewText =
+          match.metadata?.text?.slice(0, 300) || "No text available";
+        const truncationIndicator =
+          match.metadata?.text?.length > 300 ? "..." : "";
+        console.log(
+          `🔹 Rank ${rankIndex + 1} | Similarity: ${similarityScore}%`
+        );
         console.log(`📄 Chunk ID: ${match.id}`);
         console.log(`📝 Preview: ${previewText}${truncationIndicator}`);
         console.log("─".repeat(80) + "\n");
       });
 
       // Use top chunks as context for GPT-4o
-      const topChunks = searchResults.matches.map(match => ({
-        text: match.metadata?.text || ""
+      const topChunks = searchResults.matches.map((match) => ({
+        text: match.metadata?.text || "",
       }));
       const answer = await answerWithGPT4O(searchQuery, topChunks);
       console.log("💡 AI Answer:\n", answer);
-
     } else {
       console.log("❌ No relevant chunks found for your search query");
     }
