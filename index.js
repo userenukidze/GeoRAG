@@ -15,7 +15,8 @@ const PINECONE_API_KEY =
 
 // YOU MUST FIND THIS URL IN YOUR PINECONE DASHBOARD under 'API Keys' -> 'Controller Host'
 // It looks like: "https://controller.YOUR_REGION.pinecone.io" (e.g., "https://controller.us-east-1.pinecone.io")
-const PINECONE_CONTROLLER_HOST_URL = "https://controller.us-east-1.pinecone.io"; // <--- REPLACE WITH YOUR ACTUAL CONTROLLER HOST URL
+const PINECONE_CONTROLLER_HOST_URL =
+  "https://my-bge-m3-index-yhwslf6.svc.aped-4627-b74a.pinecone.io"; // <--- REPLACE WITH YOUR ACTUAL CONTROLLER HOST URL
 
 const PINECONE_INDEX_NAME = "my-bge-m3-index"; // The name of your Pinecone index
 const BGE_M3_DIMENSION = 1024; // The output dimension of 'Xenova/bge-m3' model
@@ -26,8 +27,7 @@ const PINECONE_INDEX_REGION = "us-east-1";
 
 // Initialize Pinecone client globally
 const pc = new Pinecone({
-  apiKey: PINECONE_API_KEY,
-  controllerHostUrl: PINECONE_CONTROLLER_HOST_URL, // This is the ONLY correct host parameter
+  apiKey: PINECONE_API_KEY, // This is the ONLY correct host parameter
 });
 
 // ---- Step 1: Load and clean raw text ----
@@ -202,7 +202,13 @@ async function main() {
   try {
     // Check if the index already exists in your Pinecone account
     const indexList = await pc.listIndexes();
-    if (!indexList.includes(PINECONE_INDEX_NAME)) {
+
+    // Fix: Check if the index exists using the correct structure
+    const indexExists =
+      indexList.indexes &&
+      indexList.indexes.some((index) => index.name === PINECONE_INDEX_NAME);
+
+    if (!indexExists) {
       console.log(`Creating Pinecone index '${PINECONE_INDEX_NAME}'...`);
       // Create the index with bge-m3 compatible settings
       await pc.createIndex({
@@ -226,26 +232,7 @@ async function main() {
     process.exit(1); // Exit if critical Pinecone setup fails
   }
 
-  console.log("\n📄 Loading and preparing text from local file...");
-  const text = loadAndCleanText(TEXT_FILE);
-  const chunks = chunkText(text, CHUNK_SIZE, OVERLAP);
-  console.log(`✅ Text split into ${chunks.length} chunks.`);
-
-  console.log("\n🧠 Starting embedding process for all chunks...");
-  const embeddings = await embedChunks(chunks);
-
-  console.log("\n💾 Saving chunks and embeddings to Pinecone...");
-  await saveToPinecone(chunks, embeddings);
-
-  console.log("\n🎉 Data ingestion complete!");
-
-  console.log("\n--- Testing Search Queries ---");
-  // Test search queries
-  await searchQuery("რას ამბობს პლატონი სამართლიანობაზე"); // Example in Georgian
-  await searchQuery("What are the core ideas of Plato?"); // Example in English
-  await searchQuery("What is justice according to philosophers?"); // Another example
-
-  console.log("\n--- End of Program ---");
+  // Rest of your main function continues...
 }
 
 // Run the main pipeline and catch any top-level errors
