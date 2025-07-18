@@ -1,6 +1,17 @@
 const fs = require("fs");
 const { pipeline } = require("@xenova/transformers"); // npm install @xenova/transformers
 const { cosineSimilarity } = require("ml-distance"); // npm install ml-distance
+// filepath: /C:/Users/user/Desktop/Large Projects/GeoRAG/index.js
+import fs from "fs";
+import { pipeline } from "@xenova/transformers";
+import pkg from "ml-distance";
+import { Pinecone } from "@pinecone-database/pinecone";
+
+const { cosineSimilarity } = pkg;
+const pc = new Pinecone({
+  apiKey:
+    "pcsk_TqZYd_2JKFQdA9hNpduqVHPx2E6Xo5LfQsLNZFRjXMDu4jnWWrtdpNkitXNs96cTHWUec",
+});
 
 const TEXT_FILE = "./Dummy Text Files/corpora.txt";
 const CHUNK_JSON_FILE = "chunks.json";
