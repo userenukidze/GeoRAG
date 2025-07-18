@@ -2,241 +2,317 @@ import fs from "fs";
 import { pipeline } from "@xenova/transformers";
 import { Pinecone } from "@pinecone-database/pinecone";
 
-// --- Configuration Constants ---
-const TEXT_FILE = "./Dummy Text Files/corpora.txt"; // Path to your source text file
-const CHUNK_SIZE = 500; // Size of text chunks (in words)
-const OVERLAP = 50; // Overlap between chunks (in words)
+// ===== CONFIGURATION CONSTANTS =====
+
+// File Processing Configuration
+const SOURCE_TEXT_FILE_PATH = "./Dummy Text Files/corpora.txt";
+const WORDS_PER_CHUNK = 500;
+const OVERLAP_WORDS = 50;
+const BATCH_SIZE = 100;
 
 // Pinecone Configuration
-// IMPORTANT: Replace these with your actual Pinecone API Key and Controller Host URL.
-// For production, ALWAYS use environment variables (e.g., process.env.PINECONE_API_KEY).
-const PINECONE_API_KEY =
-  "pcsk_TqZYd_2JKFQdA9hNpduqVHPx2E6Xo5LfQsLNZFRjXMDu4jnWWrtdpNkitXNs96cTHWUec"; // Your actual API Key
-
-// YOU MUST FIND THIS URL IN YOUR PINECONE DASHBOARD under 'API Keys' -> 'Controller Host'
-// It looks like: "https://controller.YOUR_REGION.pinecone.io" (e.g., "https://controller.us-east-1.pinecone.io")
-const PINECONE_CONTROLLER_HOST_URL =
-  "https://my-bge-m3-index-yhwslf6.svc.aped-4627-b74a.pinecone.io"; // <--- REPLACE WITH YOUR ACTUAL CONTROLLER HOST URL
-
-const PINECONE_INDEX_NAME = "my-bge-m3-index"; // The name of your Pinecone index
-const BGE_M3_DIMENSION = 1024; // The output dimension of 'Xenova/bge-m3' model
-
-// The region of your Pinecone index. This is needed for index creation.
-// Based on your previous screenshot, this is "us-east-1".
+// SECURITY NOTE: In production, use environment variables
+const PINECONE_API_KEY = "pcsk_TqZYd_2JKFQdA9hNpduqVHPx2E6Xo5LfQsLNZFRjXMDu4jnWWrtdpNkitXNs96cTHWUec";
+const PINECONE_INDEX_NAME = "my-bge-m3-index";
 const PINECONE_INDEX_REGION = "us-east-1";
 
-// Initialize Pinecone client globally
-const pc = new Pinecone({
-  apiKey: PINECONE_API_KEY, // This is the ONLY correct host parameter
+// Model Configuration
+const EMBEDDING_MODEL_NAME = "Xenova/bge-m3";
+const EMBEDDING_DIMENSION = 1024;
+const SIMILARITY_METRIC = "cosine";
+
+// Initialize Pinecone client
+const pineconeClient = new Pinecone({
+  apiKey: PINECONE_API_KEY,
 });
 
-// ---- Step 1: Load and clean raw text ----
+// ===== TEXT PROCESSING FUNCTIONS =====
+
 /**
- * Loads text from a file and performs basic cleaning.
- * @param {string} filePath - The path to the text file.
- * @returns {string} The cleaned text.
+ * Loads text from a file and performs basic cleaning
+ * @param {string} filePath - Path to the text file
+ * @returns {string} Cleaned text content
  */
-function loadAndCleanText(filePath) {
+function loadAndCleanTextFile(filePath) {
   try {
-    const rawText = fs.readFileSync(filePath, "utf-8");
-    return rawText.replace(/\s+/g, " ").trim(); // Replace multiple whitespaces with single space and trim
+    console.log(`📖 Loading text from: ${filePath}`);
+    const rawTextContent = fs.readFileSync(filePath, "utf-8");
+    const cleanedText = rawTextContent.replace(/\s+/g, " ").trim();
+    
+    console.log(`✅ Successfully loaded ${cleanedText.split(' ').length} words`);
+    return cleanedText;
+    
   } catch (error) {
-    console.error(`❌ Error loading text file ${filePath}:`, error);
-    process.exit(1); // Exit if file cannot be read
+    console.error(`❌ Error loading text file ${filePath}:`, error.message);
+    throw new Error(`Failed to load text file: ${error.message}`);
   }
 }
 
-// ---- Step 2: Chunk text with overlap ----
 /**
- * Chunks the text into smaller pieces with specified overlap.
- * @param {string} text - The input text.
- * @param {number} chunkSize - The maximum number of words per chunk.
- * @param {number} overlap - The number of words to overlap between chunks.
- * @returns {Array<Object>} An array of chunk objects with id and text.
+ * Splits text into overlapping chunks for better context preservation
+ * @param {string} textContent - Input text to chunk
+ * @param {number} wordsPerChunk - Maximum words per chunk
+ * @param {number} overlapWords - Words to overlap between chunks
+ * @returns {Array<Object>} Array of chunk objects with id and text
  */
-function chunkText(text, chunkSize = 500, overlap = 50) {
-  const words = text.split(" ");
-  const chunks = [];
-  for (let i = 0; i < words.length; i += chunkSize - overlap) {
-    const chunkWords = words.slice(i, i + chunkSize);
-    chunks.push({
-      id: `chunk_${chunks.length}`, // Pinecone requires string IDs
+function createTextChunks(textContent, wordsPerChunk = WORDS_PER_CHUNK, overlapWords = OVERLAP_WORDS) {
+  console.log(`✂️ Creating text chunks (${wordsPerChunk} words per chunk, ${overlapWords} overlap)...`);
+  
+  const wordsArray = textContent.split(" ");
+  const textChunks = [];
+  
+  for (let startIndex = 0; startIndex < wordsArray.length; startIndex += wordsPerChunk - overlapWords) {
+    const chunkWords = wordsArray.slice(startIndex, startIndex + wordsPerChunk);
+    
+    textChunks.push({
+      id: `chunk_${textChunks.length}`,
       text: chunkWords.join(" "),
+      wordCount: chunkWords.length,
+      startPosition: startIndex,
     });
   }
-  return chunks;
+  
+  console.log(`✅ Created ${textChunks.length} text chunks`);
+  return textChunks;
 }
 
-// ---- Step 3: Embed text using Xenova/bge-m3 ----
-/**
- * Embeds an array of text chunks using the Xenova/bge-m3 model.
- * @param {Array<Object>} chunks - An array of chunk objects.
- * @returns {Promise<Array<Float32Array>>} A promise that resolves to an array of embeddings.
- */
-async function embedChunks(chunks) {
-  console.log("🧠 Initializing embedding model 'Xenova/bge-m3'...");
-  const embedder = await pipeline("feature-extraction", "Xenova/bge-m3");
-  console.log("✅ Embedding model loaded.");
+// ===== EMBEDDING FUNCTIONS =====
 
-  const embeddings = [];
-  for (let i = 0; i < chunks.length; i++) {
-    if (i % 10 === 0 || i === chunks.length - 1) {
-      console.log(`Embedding chunk ${i + 1} of ${chunks.length}...`);
+/**
+ * Generates embeddings for text chunks using the BGE-M3 model
+ * @param {Array<Object>} textChunks - Array of text chunk objects
+ * @returns {Promise<Array<Float32Array>>} Array of embedding vectors
+ */
+async function generateEmbeddingsForChunks(textChunks) {
+  console.log(`🧠 Initializing embedding model '${EMBEDDING_MODEL_NAME}'...`);
+  
+  const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
+  console.log("✅ Embedding model loaded successfully");
+
+  const embeddingVectors = [];
+  const totalChunks = textChunks.length;
+  
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+    // Progress logging
+    if (chunkIndex % 10 === 0 || chunkIndex === totalChunks - 1) {
+      console.log(`⚡ Processing chunk ${chunkIndex + 1} of ${totalChunks}...`);
     }
-    // Perform embedding and normalize the output
-    const output = await embedder(chunks[i].text, {
+    
+    const embeddingOutput = await embeddingPipeline(textChunks[chunkIndex].text, {
       pooling: "cls",
       normalize: true,
     });
-    embeddings.push(output.data); // output.data is a Float32Array
+    
+    embeddingVectors.push(embeddingOutput.data);
   }
-  return embeddings;
+  
+  console.log(`✅ Generated ${embeddingVectors.length} embedding vectors`);
+  return embeddingVectors;
 }
 
-// ---- Step 4: Save chunks and embeddings to Pinecone ----
 /**
- * Upserts text chunks and their embeddings into a Pinecone index.
- * The text content is stored in the metadata.
- * @param {Array<Object>} chunks - The array of chunk objects.
- * @param {Array<Float32Array>} embeddings - The array of corresponding embeddings.
+ * Generates embedding for a single query string
+ * @param {string} queryText - Text to embed
+ * @returns {Promise<Float32Array>} Query embedding vector
  */
-async function saveToPinecone(chunks, embeddings) {
-  const index = pc.Index(PINECONE_INDEX_NAME);
-  const vectorsToUpsert = [];
+async function generateQueryEmbedding(queryText) {
+  console.log(`🧠 Embedding query: "${queryText}"...`);
+  
+  const embeddingPipeline = await pipeline("feature-extraction", EMBEDDING_MODEL_NAME);
+  const queryEmbeddingOutput = await embeddingPipeline(queryText, {
+    pooling: "cls",
+    normalize: true,
+  });
+  
+  console.log("✅ Query embedding generated");
+  return queryEmbeddingOutput.data;
+}
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const embedding = embeddings[i];
+// ===== PINECONE DATABASE FUNCTIONS =====
 
-    // Prepare vector object for Pinecone upsert
-    vectorsToUpsert.push({
-      id: chunk.id, // Unique string ID for the vector
-      values: Array.from(embedding), // Convert Float32Array to regular Array for serialization
+/**
+ * Ensures the Pinecone index exists, creates it if necessary
+ * @returns {Promise<void>}
+ */
+async function ensurePineconeIndexExists() {
+  console.log("🔍 Checking if Pinecone index exists...");
+  
+  const indexList = await pineconeClient.listIndexes();
+  const indexExists = indexList.indexes?.some(index => index.name === PINECONE_INDEX_NAME);
+  
+  if (!indexExists) {
+    console.log(`📝 Creating Pinecone index '${PINECONE_INDEX_NAME}'...`);
+    
+    await pineconeClient.createIndex({
+      name: PINECONE_INDEX_NAME,
+      dimension: EMBEDDING_DIMENSION,
+      metric: SIMILARITY_METRIC,
+      spec: {
+        serverless: {
+          cloud: "aws",
+          region: PINECONE_INDEX_REGION,
+        },
+      },
+    });
+    
+    console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' created successfully`);
+  } else {
+    console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' already exists`);
+  }
+}
+
+/**
+ * Uploads text chunks and embeddings to Pinecone in batches
+ * @param {Array<Object>} textChunks - Text chunk objects
+ * @param {Array<Float32Array>} embeddingVectors - Corresponding embeddings
+ * @returns {Promise<void>}
+ */
+async function uploadChunksToPinecone(textChunks, embeddingVectors) {
+  console.log(`💾 Preparing to upload ${textChunks.length} vectors to Pinecone...`);
+  
+  const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
+  const vectorsToUpload = [];
+
+  // Prepare vectors for upload
+  for (let chunkIndex = 0; chunkIndex < textChunks.length; chunkIndex++) {
+    const currentChunk = textChunks[chunkIndex];
+    const currentEmbedding = embeddingVectors[chunkIndex];
+
+    vectorsToUpload.push({
+      id: currentChunk.id,
+      values: Array.from(currentEmbedding),
       metadata: {
-        text: chunk.text, // Store the original text chunk in metadata
-        original_chunk_id: chunk.id, // Optional: for additional reference
+        text: currentChunk.text,
+        wordCount: currentChunk.wordCount,
+        startPosition: currentChunk.startPosition,
+        chunkId: currentChunk.id,
       },
     });
   }
 
-  // Upsert vectors to Pinecone in batches for efficiency
-  const batchSize = 100; // Pinecone recommends batches for upserts
-  console.log(`💾 Starting upsert to Pinecone in batches of ${batchSize}...`);
-  for (let i = 0; i < vectorsToUpsert.length; i += batchSize) {
-    const batch = vectorsToUpsert.slice(i, i + batchSize);
+  // Upload in batches for efficiency
+  const totalBatches = Math.ceil(vectorsToUpload.length / BATCH_SIZE);
+  console.log(`📦 Uploading in ${totalBatches} batches of ${BATCH_SIZE}...`);
+  
+  for (let batchIndex = 0; batchIndex < vectorsToUpload.length; batchIndex += BATCH_SIZE) {
+    const currentBatch = vectorsToUpload.slice(batchIndex, batchIndex + BATCH_SIZE);
+    const batchNumber = Math.floor(batchIndex / BATCH_SIZE) + 1;
+    
     try {
-      await index.upsert(batch);
-      console.log(
-        `✅ Upserted batch ${Math.ceil(
-          (i + batchSize) / batchSize
-        )} of ${Math.ceil(vectorsToUpsert.length / batchSize)}`
-      );
+      await pineconeIndex.upsert(currentBatch);
+      console.log(`✅ Uploaded batch ${batchNumber} of ${totalBatches}`);
+      
     } catch (error) {
-      console.error(`❌ Error upserting batch starting at index ${i}:`, error);
-      // In a real application, you might implement retry logic or more robust error handling
-      throw error; // Re-throw to halt if a batch fails completely
+      console.error(`❌ Failed to upload batch ${batchNumber}:`, error.message);
+      throw new Error(`Batch upload failed: ${error.message}`);
     }
   }
 
-  console.log(
-    `🎉 Successfully uploaded ${vectorsToUpsert.length} vectors and chunks to Pinecone index: ${PINECONE_INDEX_NAME}`
-  );
+  console.log(`🎉 Successfully uploaded all ${vectorsToUpload.length} vectors to Pinecone`);
 }
 
-// ---- Step 5: Query Embedding & Search from Pinecone ----
 /**
- * Embeds a query and searches the Pinecone index for similar chunks.
- * @param {string} query - The query string.
- * @param {number} topK - The number of top similar results to retrieve.
+ * Searches the Pinecone index for similar text chunks
+ * @param {string} searchQuery - Query string to search for
+ * @param {number} maxResults - Number of top results to return
+ * @returns {Promise<void>}
  */
-async function searchQuery(query, topK = 5) {
-  const index = pc.Index(PINECONE_INDEX_NAME);
-  console.log(`🧠 Embedding query: "${query}"...`);
-  const embedder = await pipeline("feature-extraction", "Xenova/bge-m3");
-  const queryEmbedding = (
-    await embedder(query, { pooling: "cls", normalize: true })
-  ).data;
-  console.log("✅ Query embedded.");
-
-  console.log(
-    `🔎 Searching Pinecone index '${PINECONE_INDEX_NAME}' for similar vectors...`
-  );
+async function searchSimilarChunks(searchQuery, maxResults = 5) {
+  console.log(`🔎 Searching for: "${searchQuery}"`);
+  
+  const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
+  
   try {
-    const queryResult = await index.query({
-      vector: Array.from(queryEmbedding), // Convert to array for Pinecone query
-      topK: topK,
-      includeMetadata: true, // Crucial: tells Pinecone to return the stored metadata (your text chunks)
+    // Generate embedding for the search query
+    const queryEmbedding = await generateQueryEmbedding(searchQuery);
+    
+    // Search the index
+    console.log(`🔍 Querying Pinecone index for ${maxResults} similar chunks...`);
+    const searchResults = await pineconeIndex.query({
+      vector: Array.from(queryEmbedding),
+      topK: maxResults,
+      includeMetadata: true,
     });
 
-    if (queryResult.matches && queryResult.matches.length > 0) {
-      console.log(`✨ Found ${queryResult.matches.length} relevant results:`);
-      for (let rank = 0; rank < queryResult.matches.length; rank++) {
-        const match = queryResult.matches[rank];
-        console.log(
-          `\n🔹 Rank ${rank + 1} | Chunk ID: ${
-            match.id
-          } | Score: ${match.score.toFixed(4)}`
-        );
-        // Check if metadata.text exists before accessing
-        if (match.metadata && match.metadata.text) {
-          console.log(
-            match.metadata.text.slice(0, 300) +
-              (match.metadata.text.length > 300 ? "..." : ""),
-            "\n---"
-          );
-        } else {
-          console.log("No text found in metadata for this chunk.", "\n---");
-        }
-      }
-    } else {
-      console.log("No relevant chunks found in Pinecone for your query.");
-    }
-  } catch (error) {
-    console.error("❌ Error during Pinecone search:", error);
-  }
-}
-
-// ---- Main Pipeline ----
-async function main() {
-  console.log("🚀 Initializing Pinecone client and ensuring index exists...");
-  try {
-    // Check if the index already exists in your Pinecone account
-    const indexList = await pc.listIndexes();
-
-    // Fix: Check if the index exists using the correct structure
-    const indexExists =
-      indexList.indexes &&
-      indexList.indexes.some((index) => index.name === PINECONE_INDEX_NAME);
-
-    if (!indexExists) {
-      console.log(`Creating Pinecone index '${PINECONE_INDEX_NAME}'...`);
-      // Create the index with bge-m3 compatible settings
-      await pc.createIndex({
-        name: PINECONE_INDEX_NAME,
-        dimension: BGE_M3_DIMENSION, // Must match your embedding model's output dimension
-        metric: "cosine", // bge-m3 uses cosine similarity
-        spec: {
-          // Define the serverless specific details
-          serverless: {
-            cloud: "aws", // Specify your cloud provider (e.g., 'aws', 'gcp', 'azure')
-            region: PINECONE_INDEX_REGION, // Use the region where you want the index to be
-          },
-        },
+    // Display results
+    if (searchResults.matches && searchResults.matches.length > 0) {
+      console.log(`✨ Found ${searchResults.matches.length} relevant results:\n`);
+      
+      searchResults.matches.forEach((match, rankIndex) => {
+        const similarityScore = (match.score * 100).toFixed(2);
+        const previewText = match.metadata?.text?.slice(0, 300) || "No text available";
+        const truncationIndicator = match.metadata?.text?.length > 300 ? "..." : "";
+        
+        console.log(`🔹 Rank ${rankIndex + 1} | Similarity: ${similarityScore}%`);
+        console.log(`📄 Chunk ID: ${match.id}`);
+        console.log(`📝 Preview: ${previewText}${truncationIndicator}`);
+        console.log("─".repeat(80) + "\n");
       });
-      console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' created.`);
     } else {
-      console.log(`✅ Pinecone index '${PINECONE_INDEX_NAME}' already exists.`);
+      console.log("❌ No relevant chunks found for your search query");
     }
+    
   } catch (error) {
-    console.error("❌ Failed to initialize Pinecone or ensure index:", error);
-    process.exit(1); // Exit if critical Pinecone setup fails
+    console.error("❌ Search failed:", error.message);
+    throw new Error(`Search operation failed: ${error.message}`);
   }
-
-  // Rest of your main function continues...
 }
 
-// Run the main pipeline and catch any top-level errors
-main().catch((error) => {
-  console.error("An unhandled error occurred in the main pipeline:", error);
-  process.exit(1); // Exit with an error code
+// ===== MAIN PIPELINE =====
+
+/**
+ * Main execution pipeline that orchestrates the entire process
+ * @returns {Promise<void>}
+ */
+async function executeMainPipeline() {
+  console.log("🚀 Starting Text Embedding and Search Pipeline\n");
+  
+  try {
+    // Step 1: Initialize Pinecone
+    console.log("=".repeat(50));
+    console.log("STEP 1: PINECONE INITIALIZATION");
+    console.log("=".repeat(50));
+    await ensurePineconeIndexExists();
+
+    // Step 2: Load and process text
+    console.log("\n" + "=".repeat(50));
+    console.log("STEP 2: TEXT PROCESSING");
+    console.log("=".repeat(50));
+    const cleanedTextContent = loadAndCleanTextFile(SOURCE_TEXT_FILE_PATH);
+    const textChunks = createTextChunks(cleanedTextContent, WORDS_PER_CHUNK, OVERLAP_WORDS);
+
+    // Step 3: Generate embeddings
+    console.log("\n" + "=".repeat(50));
+    console.log("STEP 3: EMBEDDING GENERATION");
+    console.log("=".repeat(50));
+    const embeddingVectors = await generateEmbeddingsForChunks(textChunks);
+
+    // Step 4: Upload to Pinecone
+    console.log("\n" + "=".repeat(50));
+    console.log("STEP 4: PINECONE UPLOAD");
+    console.log("=".repeat(50));
+    await uploadChunksToPinecone(textChunks, embeddingVectors);
+
+    // Step 5: Test search functionality
+    console.log("\n" + "=".repeat(50));
+    console.log("STEP 5: SEARCH TESTING");
+    console.log("=".repeat(50));
+    await searchSimilarChunks("What is the main topic discussed?", 3);
+    
+    console.log("\n🎉 Pipeline completed successfully!");
+    
+  } catch (error) {
+    console.error("\n❌ Pipeline failed:", error.message);
+    console.error("Stack trace:", error.stack);
+    process.exit(1);
+  }
+}
+
+// ===== EXECUTION =====
+
+// Execute the main pipeline with comprehensive error handling
+executeMainPipeline().catch((error) => {
+  console.error("💥 Unhandled error in main pipeline:", error.message);
+  console.error("Full error:", error);
+  process.exit(1);
 });
